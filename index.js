@@ -164,11 +164,17 @@ async function createApp() {
 
   /* ================= POSTS ================= */
 
-  // GET FEED
+  // index.js
+
+  // GET FEED (Optimized with Cursor Pagination)
   app.get("/posts", verifyToken, async (req, res) => {
     try {
       const currentUserId = req.user.id;
-      const filter = {
+      const { cursor, limit = 10 } = req.query; // cursor is the ID of the last post loaded
+      const limitNum = parseInt(limit);
+
+      // Base filter for privacy
+      let filter = {
         $or: [
           { privacy: "public" },
           { privacy: { $exists: false } },
@@ -176,10 +182,18 @@ async function createApp() {
         ],
       };
 
+      // If a cursor exists, fetch posts OLDER than that cursor ID
+      if (cursor) {
+        filter._id = { $lt: cursor };
+      }
+
+      // Fetch posts
       const posts = await Post.find(filter)
         .populate("userId", "firstName lastName profilePic")
-        .sort({ createdAt: -1 });
+        .sort({ _id: -1 }) // Ensure strictly sorted by ID (which includes timestamp)
+        .limit(limitNum);
 
+      // Process likes/reactions (Your existing logic)
       const postsWithData = await Promise.all(
         posts.map(async (post) => {
           const myLike = await Like.findOne({
@@ -200,12 +214,25 @@ async function createApp() {
             ...post._doc,
             isLiked: !!myLike,
             userReaction: myLike ? myLike.type : null,
-            recentReactors: recentLikes.map((l) => l.userId),
+            // Filter ensures we don't send 'null' if a user was deleted from DB
+            recentReactors: recentLikes
+              .map((l) => l.userId)
+              .filter((user) => user),
           };
         })
       );
 
-      res.status(200).json(postsWithData);
+      // Return posts + the nextCursor for the frontend to use next time
+      const nextCursor =
+        postsWithData.length > 0
+          ? postsWithData[postsWithData.length - 1]._id
+          : null;
+
+      res.status(200).json({
+        posts: postsWithData,
+        nextCursor,
+        hasMore: postsWithData.length === limitNum,
+      });
     } catch (err) {
       console.error(err);
       res.status(500).json("Server error");
@@ -255,7 +282,13 @@ async function createApp() {
       const existingLike = await Like.findOne({ userId, postId });
       if (existingLike) {
         await Like.findByIdAndDelete(existingLike._id);
-        await Post.findByIdAndUpdate(postId, { $inc: { likesCount: -1 } });
+        await Post.findByIdAndUpdate(postId, [
+          {
+            $set: {
+              likesCount: { $max: [0, { $subtract: ["$likesCount", 1] }] },
+            },
+          },
+        ]);
         return res.status(200).json("Unliked");
       }
 
@@ -269,7 +302,7 @@ async function createApp() {
     }
   });
 
-  // Reaction (Post & Comment)
+   // Reaction (Post & Comment) - SAFE DECREMENT VERSION
   app.put("/api/react/:targetType/:id", verifyToken, async (req, res) => {
     try {
       const { targetType, id } = req.params;
@@ -277,20 +310,33 @@ async function createApp() {
       const userId = req.user.id;
 
       const existing = await Like.findOne({ userId, targetId: id, targetType });
+      
       if (existing) {
+        // CASE 1: REMOVING REACTION (Toggle off)
         if (existing.type === reactionType) {
           await Like.findByIdAndDelete(existing._id);
+          
+          // Safe Decrement: Uses $max to ensure it never goes below 0
+          const updateQuery = [
+            { $set: { likesCount: { $max: [0, { $subtract: ["$likesCount", 1] }] } } }
+          ];
+
           if (targetType === "Post")
-            await Post.findByIdAndUpdate(id, { $inc: { likesCount: -1 } });
+            await Post.findByIdAndUpdate(id, updateQuery);
           else
-            await Comment.findByIdAndUpdate(id, { $inc: { likesCount: -1 } });
+            await Comment.findByIdAndUpdate(id, updateQuery);
+            
           return res.status(200).json({ status: "removed" });
         }
+
+        // CASE 2: CHANGING REACTION (e.g. Like -> Love)
+        // Count stays the same, just update the type
         existing.type = reactionType;
         await existing.save();
         return res.status(200).json({ status: "updated", type: reactionType });
       }
 
+      // CASE 3: ADDING NEW REACTION
       const newLike = new Like({
         userId,
         targetId: id,
@@ -298,9 +344,11 @@ async function createApp() {
         type: reactionType,
       });
       await newLike.save();
+      
+      // Increment is safe (going up is always fine)
       if (targetType === "Post")
         await Post.findByIdAndUpdate(id, { $inc: { likesCount: 1 } });
-      else
+      else 
         await Comment.findByIdAndUpdate(id, { $inc: { likesCount: 1 } });
 
       res.status(200).json({ status: "added", type: reactionType });
@@ -309,7 +357,6 @@ async function createApp() {
       res.status(500).json("Server error");
     }
   });
-
   // Fetch reacting users
   app.get("/api/react/:targetType/:id", verifyToken, async (req, res) => {
     try {
@@ -354,10 +401,9 @@ async function createApp() {
             .limit(5)
             .select("type");
 
-          const distinctTypes = [...new Set(recentLikes.map((l) => l.type))].slice(
-            0,
-            2
-          );
+          const distinctTypes = [
+            ...new Set(recentLikes.map((l) => l.type)),
+          ].slice(0, 2);
 
           return {
             ...c._doc,
@@ -451,7 +497,9 @@ async function createApp() {
       await newComment.save();
       await Post.findByIdAndUpdate(postId, { $inc: { commentsCount: 1 } });
       if (rootCommentId)
-        await Comment.findByIdAndUpdate(rootCommentId, { $inc: { replyCount: 1 } });
+        await Comment.findByIdAndUpdate(rootCommentId, {
+          $inc: { replyCount: 1 },
+        });
 
       const populatedComment = await Comment.findById(newComment._id)
         .populate("userId", "firstName lastName profilePic")
@@ -481,3 +529,12 @@ module.exports = async (req, res) => {
     res.status(500).send("Server initialization error");
   }
 };
+
+/* ===================== RUN LOCALLY ===================== */
+if (require.main === module) {
+  (async () => {
+    const app = await createApp();
+    const PORT = process.env.PORT || 5000;
+    app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+  })();
+}

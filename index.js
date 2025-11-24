@@ -37,9 +37,13 @@ cloudinary.config({
 });
 
 // Initialize Firebase Admin
-admin.initializeApp({
-  credential: admin.credential.cert(serviceAccount)
-});
+const firebaseApp = admin.apps.length
+  ? admin.app() // Use existing app if already initialized
+  : admin.initializeApp({
+      credential: admin.credential.cert(serviceAccount)
+    });
+
+module.exports = firebaseApp;
 
 // Multer Config (for temporary file upload)
 const upload = multer({ dest: "uploads/" });

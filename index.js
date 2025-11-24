@@ -273,27 +273,32 @@ async function createApp() {
     }
   });
 
-  // Like/unlike simplified routes (kept from your code)
+  // Like/unlike simplified routes
   app.put("/posts/:id/like", verifyToken, async (req, res) => {
     try {
       const postId = req.params.id;
       const userId = req.user.id;
 
       const existingLike = await Like.findOne({ userId, postId });
+      
       if (existingLike) {
+        // 1. Remove the like
         await Like.findByIdAndDelete(existingLike._id);
-        await Post.findByIdAndUpdate(postId, [
-          {
-            $set: {
-              likesCount: { $max: [0, { $subtract: ["$likesCount", 1] }] },
-            },
-          },
-        ]);
+        
+        // 2. SAFETY DECREMENT: Only subtract if likesCount > 0
+        await Post.findOneAndUpdate(
+          { _id: postId, likesCount: { $gt: 0 } }, // Condition: ID match AND Count > 0
+          { $inc: { likesCount: -1 } }
+        );
+        
         return res.status(200).json("Unliked");
       }
 
+      // Adding a like
       const newLike = new Like({ userId, postId });
       await newLike.save();
+      
+      // Incrementing is always safe
       await Post.findByIdAndUpdate(postId, { $inc: { likesCount: 1 } });
       res.status(200).json("Liked");
     } catch (err) {
@@ -302,7 +307,6 @@ async function createApp() {
     }
   });
 
-   // Reaction (Post & Comment) - SAFE DECREMENT VERSION
   app.put("/api/react/:targetType/:id", verifyToken, async (req, res) => {
     try {
       const { targetType, id } = req.params;
@@ -316,23 +320,22 @@ async function createApp() {
         if (existing.type === reactionType) {
           await Like.findByIdAndDelete(existing._id);
           
-          // Safe Decrement: Uses $max to ensure it never goes below 0
-          const updateQuery = [
-            { $set: { likesCount: { $max: [0, { $subtract: ["$likesCount", 1] }] } } }
-          ];
+          // SAFETY DECREMENT QUERY
+          const condition = { _id: id, likesCount: { $gt: 0 } };
+          const update = { $inc: { likesCount: -1 } };
 
           if (targetType === "Post")
-            await Post.findByIdAndUpdate(id, updateQuery);
+            await Post.findOneAndUpdate(condition, update);
           else
-            await Comment.findByIdAndUpdate(id, updateQuery);
+            await Comment.findOneAndUpdate(condition, update);
             
           return res.status(200).json({ status: "removed" });
         }
 
         // CASE 2: CHANGING REACTION (e.g. Like -> Love)
-        // Count stays the same, just update the type
         existing.type = reactionType;
         await existing.save();
+        // Count does not change here
         return res.status(200).json({ status: "updated", type: reactionType });
       }
 
@@ -345,7 +348,7 @@ async function createApp() {
       });
       await newLike.save();
       
-      // Increment is safe (going up is always fine)
+      // Incrementing is always safe
       if (targetType === "Post")
         await Post.findByIdAndUpdate(id, { $inc: { likesCount: 1 } });
       else 
@@ -357,6 +360,9 @@ async function createApp() {
       res.status(500).json("Server error");
     }
   });
+
+
+  
   // Fetch reacting users
   app.get("/api/react/:targetType/:id", verifyToken, async (req, res) => {
     try {

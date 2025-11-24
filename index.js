@@ -361,8 +361,30 @@ async function createApp() {
     }
   });
 
+  // DELETE POST
+  app.delete("/posts/:id", verifyToken, async (req, res) => {
+    try {
+      const post = await Post.findById(req.params.id);
+      if (!post) return res.status(404).json("Post not found");
 
-  
+      // Check if the requester is the owner
+      if (post.userId.toString() !== req.user.id) {
+        return res.status(403).json("You can only delete your own posts");
+      }
+
+      await Post.findByIdAndDelete(req.params.id);
+      
+      // Optional: Clean up related comments/likes
+      await Comment.deleteMany({ postId: req.params.id });
+      await Like.deleteMany({ targetId: req.params.id, targetType: "Post" });
+
+      res.status(200).json("Post deleted");
+    } catch (err) {
+      console.error(err);
+      res.status(500).json("Server error");
+    }
+  });
+
   // Fetch reacting users
   app.get("/api/react/:targetType/:id", verifyToken, async (req, res) => {
     try {

@@ -1,4 +1,3 @@
-// index.js (Vercel-ready)
 require("dotenv").config();
 const express = require("express");
 const mongoose = require("mongoose");
@@ -10,7 +9,7 @@ const cloudinary = require("cloudinary").v2;
 const streamifier = require("streamifier");
 const admin = require("firebase-admin");
 
-// Models and middleware (make sure these files exist)
+
 const User = require("./models/User");
 const Post = require("./models/Post");
 const Like = require("./models/Like");
@@ -52,9 +51,6 @@ function initFirebase() {
 if (!global._mongoPromise) {
   global._mongoPromise = mongoose
     .connect(process.env.MONGO_URI, {
-      // optional mongoose settings
-      // useNewUrlParser: true,
-      // useUnifiedTopology: true,
     })
     .then(() => console.log("MongoDB connected"))
     .catch((err) => {
@@ -63,19 +59,14 @@ if (!global._mongoPromise) {
     });
 }
 
-// App factory (create & configure express app once)
+
 async function createApp() {
-  // wait for mongoose
   await global._mongoPromise;
 
   const app = express();
   app.use(express.json());
   app.use(cors());
-
-  // Initialize Firebase Admin (safe)
   initFirebase();
-
-  // Simple root for healthcheck
   app.get("/", (req, res) => res.send("API is running"));
 
   /* ================= AUTH ROUTES ================= */
@@ -127,7 +118,6 @@ async function createApp() {
   app.post("/auth/google", async (req, res) => {
     try {
       if (!admin.apps.length) {
-        // ensure firebase admin is initialized
         initFirebase();
       }
       const { token } = req.body;
@@ -164,9 +154,6 @@ async function createApp() {
 
   /* ================= POSTS ================= */
 
-  // index.js
-
-  // GET FEED (Optimized with Cursor Pagination)
   app.get("/posts", verifyToken, async (req, res) => {
     try {
       const currentUserId = req.user.id;
@@ -190,10 +177,10 @@ async function createApp() {
       // Fetch posts
       const posts = await Post.find(filter)
         .populate("userId", "firstName lastName profilePic")
-        .sort({ _id: -1 }) // Ensure strictly sorted by ID (which includes timestamp)
+        .sort({ _id: -1 }) 
         .limit(limitNum);
 
-      // Process likes/reactions (Your existing logic)
+
       const postsWithData = await Promise.all(
         posts.map(async (post) => {
           const myLike = await Like.findOne({
@@ -214,7 +201,6 @@ async function createApp() {
             ...post._doc,
             isLiked: !!myLike,
             userReaction: myLike ? myLike.type : null,
-            // Filter ensures we don't send 'null' if a user was deleted from DB
             recentReactors: recentLikes
               .map((l) => l.userId)
               .filter((user) => user),
@@ -244,7 +230,6 @@ async function createApp() {
     try {
       let imageUrl = "";
       if (req.file) {
-        // Upload from buffer to cloudinary
         const result = await new Promise((resolve, reject) => {
           const stream = cloudinary.uploader.upload_stream(
             { folder: "posts" },
@@ -282,10 +267,8 @@ async function createApp() {
       const existingLike = await Like.findOne({ userId, postId });
       
       if (existingLike) {
-        // 1. Remove the like
         await Like.findByIdAndDelete(existingLike._id);
         
-        // 2. SAFETY DECREMENT: Only subtract if likesCount > 0
         await Post.findOneAndUpdate(
           { _id: postId, likesCount: { $gt: 0 } }, // Condition: ID match AND Count > 0
           { $inc: { likesCount: -1 } }
@@ -294,7 +277,6 @@ async function createApp() {
         return res.status(200).json("Unliked");
       }
 
-      // Adding a like
       const newLike = new Like({ userId, postId });
       await newLike.save();
       

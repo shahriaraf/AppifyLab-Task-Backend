@@ -7,8 +7,6 @@ const CommentSchema = new mongoose.Schema({
   
   // Main Thread Parent (Always the Top-Level Comment)
   parentComment: { type: mongoose.Schema.Types.ObjectId, ref: "Comment", default: null },
-  
-  // NEW: Who are we specifically replying to? (For the @User tag)
   replyToUser: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
 
   likesCount: { type: Number, default: 0 },
